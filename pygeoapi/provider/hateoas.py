@@ -32,6 +32,7 @@ import requests
 import logging
 import os
 import json
+import copy
 
 from pygeoapi.provider.base import (BaseProvider, ProviderNotFoundError)
 from pygeoapi.util import url_join
@@ -71,6 +72,7 @@ class HateoasProvider(BaseProvider):
         child_links = []
 
         data_path = self.data + entrypath
+        LOGGER.debug(data_path)
 
         if '/' not in entrypath:  # root
             root_link = baseurl
@@ -92,7 +94,31 @@ class HateoasProvider(BaseProvider):
             root_link = url_join(thispath, root_path)
 
         content = {
-            'links': [{
+
+        }
+
+        LOGGER.debug('Checking if path exists as Catalog, Collection or Asset')
+        try:
+            jsondata = _get_json_data(f'{data_path}/catalog.json')
+            content = copy.deepcopy(jsondata)
+            resource_type = 'Catalog'
+        except Exception:
+            try:
+                jsondata = _get_json_data(f'{data_path}/collection.json')
+                content = copy.deepcopy(jsondata)
+                resource_type = 'Collection'
+            except Exception:
+                try:
+                    filename = os.path.basename(data_path)
+                    jsondata = _get_json_data(f'{data_path}/{filename}.json')
+                    resource_type = 'Assets'
+                except Exception:
+                    msg = f'Resource does not exist: {data_path}'
+                    LOGGER.error(msg)
+                    raise ProviderNotFoundError(msg)
+
+
+        content['links'] = [{
                 'rel': 'root',
                 'href': f'{root_link}?f=json',
                 'type': 'application/json'
@@ -110,25 +136,6 @@ class HateoasProvider(BaseProvider):
                 'type': 'text/html'
                 }
             ]
-        }
-
-        LOGGER.debug('Checking if path exists as Catalog, Collection or Asset')
-        try:
-            jsondata = _get_json_data(f'{data_path}/catalog.json')
-            resource_type = 'Catalog'
-        except Exception:
-            try:
-                jsondata = _get_json_data(f'{data_path}/collection.json')
-                resource_type = 'Collection'
-            except Exception:
-                try:
-                    filename = os.path.basename(data_path)
-                    jsondata = _get_json_data(f'{data_path}/{filename}.json')
-                    resource_type = 'Assets'
-                except Exception:
-                    msg = f'Resource does not exist: {data_path}'
-                    LOGGER.error(msg)
-                    raise ProviderNotFoundError(msg)
 
         if resource_type == 'Catalog' or resource_type == 'Collection':
             content['type'] = resource_type
