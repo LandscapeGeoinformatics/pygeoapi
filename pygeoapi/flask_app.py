@@ -478,6 +478,14 @@ def stac_catalog_path(path):
     """
     return get_response(api_.get_stac_path(request, path))
 
+@BLUEPRINT.route('/stac/search',methods=['GET', 'POST'])
+def stac_catalog_search():
+    """
+    STAC root endpoint
+
+    :returns: HTTP response
+    """
+    return get_response(api_.get_stac_search(request))
 
 @ADMIN_BLUEPRINT.route('/admin/config', methods=['GET', 'PUT', 'PATCH'])
 def admin_config():

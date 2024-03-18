@@ -72,7 +72,6 @@ class HateoasProvider(BaseProvider):
         child_links = []
 
         data_path = self.data + entrypath
-        LOGGER.debug(data_path)
 
         if '/' not in entrypath:  # root
             root_link = baseurl
@@ -122,15 +121,18 @@ class HateoasProvider(BaseProvider):
                 'rel': 'root',
                 'href': f'{root_link}?f=json',
                 'type': 'application/json'
-                }, {
+                },
+                {
                 'rel': 'root',
                 'href': root_link,
                 'type': 'text/html'
-                }, {
+                },
+                {
                 'rel': 'self',
                 'href': f'{thispath}?f=json',
                 'type': 'application/json',
-                }, {
+                },
+                {
                 'rel': 'self',
                 'href': thispath,
                 'type': 'text/html'
@@ -186,6 +188,11 @@ class HateoasProvider(BaseProvider):
 
         elif resource_type == 'Assets':
             content = jsondata
+            content['links'].extend([{
+                'rel': 'self',
+                'href': f'{thispath}?f=json',
+                'type': 'application/json',
+                }])
             content = _modify_content_for_display(content, baseurl, urlpath)
 
         content['links'].extend(child_links)

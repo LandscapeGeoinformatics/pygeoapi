@@ -58,6 +58,7 @@ from pyproj.exceptions import CRSError
 import pytz
 from shapely.errors import WKTReadingError
 from shapely.wkt import loads as shapely_loads
+import shapely.geometry
 
 from pygeoapi import __version__, l10n
 from pygeoapi.formatter.base import FormatterSerializationError
@@ -88,6 +89,11 @@ from pygeoapi.util import (dategetter, RequestedProcessExecutionMode,
                            modify_pygeofilter, CrsTransformSpec,
                            transform_bbox)
 
+import json
+from itertools import repeat
+from collections import Counter
+import urllib
+import pprint
 LOGGER = logging.getLogger(__name__)
 
 #: Return headers for requests (e.g:X-Powered-By)
@@ -112,7 +118,7 @@ FORMAT_TYPES = OrderedDict((
     (F_JSON, 'application/json'),
     (F_PNG, 'image/png'),
     (F_MVT, 'application/vnd.mapbox-vector-tile'),
-    (F_NETCDF, 'application/x-netcdf'),
+    (F_NETCDF, 'application/x-netcdf')
 ))
 
 #: Locale used for system responses (e.g. exceptions)
@@ -178,7 +184,8 @@ CONFORMANCE = {
         "https://api.stacspec.org/v1.0.0/collections",
         "https://api.stacspec.org/v1.0.0/core",
         "https://api.stacspec.org/v1.0.0/ogcapi-features",
-        "https://api.stacspec.org/v1.0.0/item-search"
+        "https://api.stacspec.org/v1.0.0/item-search",
+        "https://api.stacspec.org/v1.0.0/item-search#sort"
     ]
 }
 
@@ -3871,6 +3878,13 @@ class API:
             "href": f"{self.base_url}/openapi?f=html"
         })
 
+        content['links'].append({
+            "rel": "search",
+            "type": "application/geo+json",
+            "title": "STAC search",
+            "href": f"{self.base_url}/stac/search",
+            "method": "GET"
+        })
         stac_collections = filter_dict_by_key_value(self.config['resources'],
                                                     'type', 'stac-collection')
 
@@ -3885,7 +3899,7 @@ class API:
                 'href': f'{stac_url}/{key}',
                 'type': FORMAT_TYPES[F_HTML]
             })
-
+        LOGGER.debug(content)
         if request.format == F_HTML:  # render
             content = render_j2_template(self.tpl_config,
                                          'stac/collection.html',
@@ -3971,7 +3985,12 @@ class API:
             if (len(list(stac_collections[dataset]['links'][0].keys())) > 0):
                 content['links'].extend(stac_collections[dataset]['links'])
             # LOGGER.debug(content['links'])
-
+            if (request.format != F_HTML or request.format is None):
+                if content['type'] == 'Feature':
+                    try:
+                        del content['assets']['default']
+                    except KeyError:
+                        pass
             if request.format == F_HTML:  # render
                 content['path'] = path
                 if 'assets' in content:  # item view
@@ -4010,6 +4029,92 @@ class API:
         else:  # send back file
             headers.pop('Content-Type', None)
             return headers, HTTPStatus.OK, stac_data
+
+    @gzip
+    @pre_process
+    @jsonldify
+    def get_stac_search(self, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
+
+        """
+        Provide STAC Search
+
+        :param request: APIRequest instance with query params
+
+        :returns: tuple of headers, status code, content
+        """
+        if not request.is_valid():
+            return self.get_format_exception(request)
+        headers = request.get_response_headers(**self.api_headers)
+        headers['Content-Type'] = 'application/geo+json'
+        # - b'{"limit": 10, "collections": ["eu_l8_EVI"], "sortby": [{"field": "collection", "direction": "asc"}]}'
+        LOGGER.debug(f'STAC search (POST data) : {request._data}')
+        queries = json.loads(request._data.decode("utf-8"))
+        limit = queries['limit']
+        sortby = queries['sortby']
+        del queries['limit']
+        del queries['sortby']
+        criteria = list(queries.keys())
+        # Search : Start from collections level (biggest), then with others criteria for filtering.
+        #          If the search doesn't comes with collections param , make one.
+        if ('collections' not in criteria):
+            LOGGER.debug('STAC search doesn\'t contain collections')
+            root_result = self.get_stac_root(request)
+            root_result = root_result[2]
+            root_result = json.loads(root_result)['links']
+            root_result = [r['href'] for r in root_result if (r['rel'] == 'child')]
+            root_result = [r.split('/')[-1].split('?')[0] for r in root_result if (r.endswith('json'))]
+            LOGGER.debug(f'STAC search find Collections : {root_result}')
+            criteria.append('collections')
+            queries['collections'] = root_result
+        # Get items under each collections - super set
+        collections = queries['collections']
+        result = list(map(self.get_stac_path, repeat(request), collections))
+        result = [r[2] for r in result]
+        result = list(map(json.loads, result))
+        LOGGER.debug(f'STAC search collections :{result}')
+        result = [r['links'] for r in result]
+        result = [o['href'] for r in result for o in r if (o['rel'] == 'item')]
+        result = ['/'.join(r.split('/')[-2:]) for r in result]
+        LOGGER.debug(f'STAC search items:{result}')
+        result = list(map(self.get_stac_path, repeat(request), result))
+        result = [r[2] for r in result]
+        result = list(map(json.loads, result))
+        LOGGER.debug(f'STAC search collections item result :{len(result)}')
+        # Filter's implememtation - create subset
+        def _bboxWrapper(l):
+            return shapely.geometry.box(*l)
+        filter_idx = Counter()
+        got_filter = False
+        for filter_ in criteria:
+            if(filter_ == 'bbox'):
+                got_filter = True
+                bbox = queries['bbox'] # Assume WGS84
+                LOGGER.debug(f'STAC search bbox filter: {bbox}')
+                bbox = shapely.geometry.box(*bbox)
+                items_bbox  = [ obj['bbox'] for obj in result  ]
+                items_bbox = list(map(_bboxWrapper,items_bbox))
+                items_bbox = list(map(bbox.intersects,items_bbox))
+                find_idx =  [ i for i,x in enumerate(items_bbox) if (x) ]
+                LOGGER.debug(f'STAC search bbox filter found : {find_idx}')
+                filter_idx.update(find_idx)
+        # 'assets': {'image': {'href': 'https://storage.googleapis.com/download/storage/v1/b/isaac_shared/o/europe_EVI%2Feu_l8_EVI%2Feu_l8_EVI0000000000-0000023296.tif?generation=1697631155438880&alt=media'
+
+        find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
+        result =  [ r for i,r in enumerate(result) if (i in find_idx)]
+        for r in result:
+            try:
+                s=r['assets']['image']['href']
+                s=urllib.parse.unquote(s)
+                s=s.split('?')[0]
+                r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
+            except KeyError:
+                pass
+        # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
+        result = { "type": "FeatureCollection", "features":result }
+        LOGGER.debug(f'STAC search return results : {pprint.pprint(result)}')
+
+
+        return headers, HTTPStatus.OK, to_json(result, self.pretty_print)
 
     def get_exception(self, status, headers, format_, code,
                       description) -> Tuple[dict, int, str]:
