@@ -199,6 +199,8 @@ DEFAULT_CRS_LIST = [
 DEFAULT_CRS = 'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
 DEFAULT_STORAGE_CRS = DEFAULT_CRS
 
+# To identify geotiff on google cloud
+asset_cogtype = 'image/tiff; application=geotiff; profile=cloud-optimized'
 
 def pre_process(func):
     """
@@ -3894,12 +3896,14 @@ class API:
                 'href': f'{stac_url}/{key}?f={F_JSON}',
                 'type': FORMAT_TYPES[F_JSON]
             })
-            content['links'].append({
-                'rel': 'child',
-                'href': f'{stac_url}/{key}',
-                'type': FORMAT_TYPES[F_HTML]
-            })
-        LOGGER.debug(content)
+            # To skip duplicate display in QGIS
+            if request.format == F_HTML:  # render
+                content['links'].append({
+                    'rel': 'child',
+                    'href': f'{stac_url}/{key}',
+                    'type': FORMAT_TYPES[F_HTML]
+                })
+        LOGGER.debug(request.format)
         if request.format == F_HTML:  # render
             content = render_j2_template(self.tpl_config,
                                          'stac/collection.html',
@@ -4049,10 +4053,12 @@ class API:
         # - b'{"limit": 10, "collections": ["eu_l8_EVI"], "sortby": [{"field": "collection", "direction": "asc"}]}'
         LOGGER.debug(f'STAC search (POST data) : {request._data}')
         queries = json.loads(request._data.decode("utf-8"))
-        limit = queries['limit']
-        sortby = queries['sortby']
-        del queries['limit']
-        del queries['sortby']
+        limit = queries['limit'] if (queries.get('limit', '') != '') else ''
+        sortby = queries['sortby'] if (queries.get('sortby', '') != '') else ''
+        if (limit != ''):
+            del queries['limit']
+        if (sortby != ''):
+            del queries['sortby']
         criteria = list(queries.keys())
         # Search : Start from collections level (biggest), then with others criteria for filtering.
         #          If the search doesn't comes with collections param , make one.
@@ -4097,18 +4103,20 @@ class API:
                 find_idx =  [ i for i,x in enumerate(items_bbox) if (x) ]
                 LOGGER.debug(f'STAC search bbox filter found : {find_idx}')
                 filter_idx.update(find_idx)
-        # 'assets': {'image': {'href': 'https://storage.googleapis.com/download/storage/v1/b/isaac_shared/o/europe_EVI%2Feu_l8_EVI%2Feu_l8_EVI0000000000-0000023296.tif?generation=1697631155438880&alt=media'
 
         find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
-        result =  [ r for i,r in enumerate(result) if (i in find_idx)]
+        result =  [ r for i,r in enumerate(result) if (i in find_idx) ]
+        LOGGER.debug(result)
+        result = sorted(result, key=lambda k: k.get(sortby[0]['field'], ''))
         for r in result:
-            try:
-                s=r['assets']['image']['href']
-                s=urllib.parse.unquote(s)
-                s=s.split('?')[0]
-                r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
-            except KeyError:
-                pass
+            if (r['assets']['image']['type'] == asset_cogtype):
+                try:
+                    s=r['assets']['image']['href']
+                    s=urllib.parse.unquote(s)
+                    s=s.split('?')[0]
+                    r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
+                except KeyError:
+                    pass
         # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
         result = { "type": "FeatureCollection", "features":result }
         LOGGER.debug(f'STAC search return results : {pprint.pprint(result)}')
