@@ -95,8 +95,8 @@ class HateoasProvider(BaseProvider):
         content = {
 
         }
-
         LOGGER.debug('Checking if path exists as Catalog, Collection or Asset')
+        LOGGER.debug(f'Hateoas : {data_path}')
         try:
             jsondata = _get_json_data(f'{data_path}/catalog.json')
             content = copy.deepcopy(jsondata)
@@ -104,12 +104,14 @@ class HateoasProvider(BaseProvider):
         except Exception:
             try:
                 jsondata = _get_json_data(f'{data_path}/collection.json')
+                LOGGER.debug(f'Hateoas : Find {data_path} collection.json')
                 content = copy.deepcopy(jsondata)
                 resource_type = 'Collection'
             except Exception:
                 try:
                     filename = os.path.basename(data_path)
                     jsondata = _get_json_data(f'{data_path}/{filename}.json')
+                    LOGGER.debug(f'Hateoas : Find {data_path} assets json')
                     resource_type = 'Assets'
                 except Exception:
                     msg = f'Resource does not exist: {data_path}'

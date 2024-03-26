@@ -3834,6 +3834,19 @@ class API:
 
         :returns: tuple of headers, status code, content
         """
+        def _recursiveSearchCollection(request, result, start=False):
+            result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self')]
+            result = [r.split('stac')[-1][1:].split('?')[0] for r in result]
+            result = list(map(self.get_stac_path,repeat(request),result))
+            result = [r[2] for r in result]
+            result = list(map(json.loads, result))
+            recursive = [ link for r in result if(r['type']=='Collection') for link in r['links'] if (link['rel']=='child') ]
+            items = [] if (start) else [ {**link, 'description':r['description'], 'title':r['title']} for r in result if(r['type']=='Collection') for link in r['links'] if (link['rel']=='self' and link['type']=='application/json') ]
+            #items = [ r for r in result if (r['id']!='geo-assets')]
+            if (len(recursive)>0):
+                tmp = _recursiveSearchCollection(request, recursive)
+                items+=tmp
+            return items
 
         if not request.is_valid():
             return self.get_format_exception(request)
@@ -3896,6 +3909,18 @@ class API:
                 'href': f'{stac_url}/{key}?f={F_JSON}',
                 'type': FORMAT_TYPES[F_JSON]
             })
+            if request.format != F_HTML:
+               # performace recursive search over collections
+                collections = _recursiveSearchCollection(request, [content['links'][-1]], True)
+                for c in collections:
+                    if (c['rel']=='self'):
+                        content['links'].append({
+                            'rel': 'child',
+                            'href': f'{c["href"]}',
+                            'type': FORMAT_TYPES[F_JSON],
+                            'description': c['description'],
+                            'title': c['title']
+                        })
             # To skip duplicate display in QGIS
             if request.format == F_HTML:  # render
                 content['links'].append({
@@ -3903,6 +3928,7 @@ class API:
                     'href': f'{stac_url}/{key}',
                     'type': FORMAT_TYPES[F_HTML]
                 })
+
         LOGGER.debug(request.format)
         if request.format == F_HTML:  # render
             content = render_j2_template(self.tpl_config,
@@ -4046,6 +4072,27 @@ class API:
 
         :returns: tuple of headers, status code, content
         """
+        def _recursiveSearchItems(request, result):
+            result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self')]
+            result = [r.split('stac')[-1][1:] for r in result]
+            result = list(map(self.get_stac_path,repeat(request),result))
+            result = [r[2] for r in result]
+            result = list(map(json.loads, result))
+            items = [ r for r in result if (r['type'] == 'Feature')]
+            result = [r['links'] for r in result if (r['type'] != 'Feature')]
+            recursive = []
+            if (len(result)>0):
+                for r in result:
+                    for obj in r:
+                        if (obj['rel'] == 'chlid' or obj['rel'] == 'item'):
+                            recursive.append(obj)
+                tmp = _recursiveSearchItems(request, recursive)
+                items+=tmp
+            return items
+
+        def _bboxWrapper(l):
+            return shapely.geometry.box(*l)
+
         if not request.is_valid():
             return self.get_format_exception(request)
         headers = request.get_response_headers(**self.api_headers)
@@ -4053,11 +4100,11 @@ class API:
         # - b'{"limit": 10, "collections": ["eu_l8_EVI"], "sortby": [{"field": "collection", "direction": "asc"}]}'
         LOGGER.debug(f'STAC search (POST data) : {request._data}')
         queries = json.loads(request._data.decode("utf-8"))
-        limit = queries['limit'] if (queries.get('limit', '') != '') else ''
-        sortby = queries['sortby'] if (queries.get('sortby', '') != '') else ''
-        if (limit != ''):
+        limit = queries['limit'] if (queries.get('limit', '') != '') else [{'limit':''}]
+        sortby = queries['sortby'][0] if (queries.get('sortby', '') != '') else {'field':''}
+        if (queries.get('limit') is not None):
             del queries['limit']
-        if (sortby != ''):
+        if (queries.get('sortby') is not None):
             del queries['sortby']
         criteria = list(queries.keys())
         # Search : Start from collections level (biggest), then with others criteria for filtering.
@@ -4069,7 +4116,6 @@ class API:
             root_result = json.loads(root_result)['links']
             root_result = [r['href'] for r in root_result if (r['rel'] == 'child')]
             root_result = [r.split('/')[-1].split('?')[0] for r in root_result if (r.endswith('json'))]
-            LOGGER.debug(f'STAC search find Collections : {root_result}')
             criteria.append('collections')
             queries['collections'] = root_result
         # Get items under each collections - super set
@@ -4077,18 +4123,20 @@ class API:
         result = list(map(self.get_stac_path, repeat(request), collections))
         result = [r[2] for r in result]
         result = list(map(json.loads, result))
-        LOGGER.debug(f'STAC search collections :{result}')
+        LOGGER.debug(f'STAC search collections :{len(result)}')
         result = [r['links'] for r in result]
-        result = [o['href'] for r in result for o in r if (o['rel'] == 'item')]
-        result = ['/'.join(r.split('/')[-2:]) for r in result]
-        LOGGER.debug(f'STAC search items:{result}')
-        result = list(map(self.get_stac_path, repeat(request), result))
-        result = [r[2] for r in result]
-        result = list(map(json.loads, result))
+        # result = ['/'.join(r.split('/')[-2:]) for r in result]
+        result = map(_recursiveSearchItems,repeat(request), result)
+        result = [ obj for c in result for obj in c ]
+        LOGGER.debug(result)
+        # result = [o['href'] for r in result for o in r if (o['rel'] == 'item')]
+        #result = ['/'.join(r.split('/')[-2:]) for r in result]
+        LOGGER.debug(f'STAC search items:{len(result)}')
+        #result = list(map(self.get_stac_path, repeat(request), result))
+        #result = [r[2] for r in result]
+        #result = list(map(json.loads, result))
         LOGGER.debug(f'STAC search collections item result :{len(result)}')
         # Filter's implememtation - create subset
-        def _bboxWrapper(l):
-            return shapely.geometry.box(*l)
         filter_idx = Counter()
         got_filter = False
         for filter_ in criteria:
@@ -4106,20 +4154,19 @@ class API:
 
         find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
         result =  [ r for i,r in enumerate(result) if (i in find_idx) ]
-        LOGGER.debug(result)
-        result = sorted(result, key=lambda k: k.get(sortby[0]['field'], ''))
-        for r in result:
-            if (r['assets']['image']['type'] == asset_cogtype):
-                try:
-                    s=r['assets']['image']['href']
-                    s=urllib.parse.unquote(s)
-                    s=s.split('?')[0]
-                    r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
-                except KeyError:
-                    pass
+        result = sorted(result, key=lambda k: k.get(sortby['field'], ''))
+        # for r in result:
+        #    if (r['assets']['image']['type'] == asset_cogtype):
+        #        try:
+        #            s=r['assets']['image']['href']
+        #            s=urllib.parse.unquote(s)
+        #            s=s.split('?')[0]
+        #            r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
+        #        except KeyError:
+        #            pass
+        LOGGER.debug(f'STAC search filtered results : {len(result)}')
         # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
         result = { "type": "FeatureCollection", "features":result }
-        LOGGER.debug(f'STAC search return results : {pprint.pprint(result)}')
 
 
         return headers, HTTPStatus.OK, to_json(result, self.pretty_print)
