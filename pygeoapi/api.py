@@ -215,6 +215,8 @@ def pre_process(func):
 
     def inner(*args):
         cls, req_in = args[:2]
+        # for recusrive search in STAC , if the request is already belongs to APIRequest , do nothing
+        if (req_in.__class__.__name__ == 'APIRequest'): return func(cls, req_in, *args[2:])
         req_out = APIRequest.with_data(req_in, getattr(cls, 'locales', set()))
         if len(args) > 2:
             return func(cls, req_out, *args[2:])
@@ -3837,6 +3839,7 @@ class API:
         def _recursiveSearchCollection(request, result, start=False):
             result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self')]
             result = [r.split('stac')[-1][1:].split('?')[0] for r in result]
+            LOGGER.debug(request.format)
             result = list(map(self.get_stac_path,repeat(request),result))
             result = [r[2] for r in result]
             result = list(map(json.loads, result))
@@ -3851,7 +3854,6 @@ class API:
         if not request.is_valid():
             return self.get_format_exception(request)
         headers = request.get_response_headers(**self.api_headers)
-
         id_ = 'pygeoapi-stac'
         stac_version = '1.0.0'
         stac_url = f'{self.base_url}/stac'
@@ -3918,8 +3920,6 @@ class API:
                             'rel': 'child',
                             'href': f'{c["href"]}',
                             'type': FORMAT_TYPES[F_JSON],
-                            'description': c['description'],
-                            'title': c['title']
                         })
             # To skip duplicate display in QGIS
             if request.format == F_HTML:  # render
@@ -3956,7 +3956,7 @@ class API:
         headers = request.get_response_headers(**self.api_headers)
 
         dataset = None
-        LOGGER.debug(f'Path: {path}')
+        LOGGER.debug(f'Path: {path} , Request format : {request.format}')
         dir_tokens = path.split('/')
         if dir_tokens:
             dataset = dir_tokens[0]
@@ -4011,6 +4011,8 @@ class API:
 
         if isinstance(stac_data, dict):
             content.update(stac_data)
+            if (content['type']=='Collection' and len(dir_tokens)>1):
+                content['title'] = f'{dataset}/{content["title"]}'
             # LOGGER.debug(f'stac_collections : {stac_collections[dataset]["links"]}')
             if (len(list(stac_collections[dataset]['links'][0].keys())) > 0):
                 content['links'].extend(stac_collections[dataset]['links'])
@@ -4073,7 +4075,7 @@ class API:
         :returns: tuple of headers, status code, content
         """
         def _recursiveSearchItems(request, result):
-            result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self')]
+            result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self' and r['rel']!='parent')]
             result = [r.split('stac')[-1][1:] for r in result]
             result = list(map(self.get_stac_path,repeat(request),result))
             result = [r[2] for r in result]
@@ -4128,7 +4130,6 @@ class API:
         # result = ['/'.join(r.split('/')[-2:]) for r in result]
         result = map(_recursiveSearchItems,repeat(request), result)
         result = [ obj for c in result for obj in c ]
-        LOGGER.debug(result)
         # result = [o['href'] for r in result for o in r if (o['rel'] == 'item')]
         #result = ['/'.join(r.split('/')[-2:]) for r in result]
         LOGGER.debug(f'STAC search items:{len(result)}')
