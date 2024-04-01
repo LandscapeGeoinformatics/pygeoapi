@@ -3836,20 +3836,6 @@ class API:
 
         :returns: tuple of headers, status code, content
         """
-        def _recursiveSearchCollection(request, result, start=False):
-            result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self')]
-            result = [r.split('stac')[-1][1:].split('?')[0] for r in result]
-            LOGGER.debug(request.format)
-            result = list(map(self.get_stac_path,repeat(request),result))
-            result = [r[2] for r in result]
-            result = list(map(json.loads, result))
-            recursive = [ link for r in result if(r['type']=='Collection') for link in r['links'] if (link['rel']=='child') ]
-            items = [] if (start) else [ {**link, 'description':r['description'], 'title':r['title']} for r in result if(r['type']=='Collection') for link in r['links'] if (link['rel']=='self' and link['type']=='application/json') ]
-            #items = [ r for r in result if (r['id']!='geo-assets')]
-            if (len(recursive)>0):
-                tmp = _recursiveSearchCollection(request, recursive)
-                items+=tmp
-            return items
 
         if not request.is_valid():
             return self.get_format_exception(request)
@@ -3911,16 +3897,6 @@ class API:
                 'href': f'{stac_url}/{key}?f={F_JSON}',
                 'type': FORMAT_TYPES[F_JSON]
             })
-            if request.format != F_HTML:
-               # performace recursive search over collections
-                collections = _recursiveSearchCollection(request, [content['links'][-1]], True)
-                for c in collections:
-                    if (c['rel']=='self'):
-                        content['links'].append({
-                            'rel': 'child',
-                            'href': f'{c["href"]}',
-                            'type': FORMAT_TYPES[F_JSON],
-                        })
             # To skip duplicate display in QGIS
             if request.format == F_HTML:  # render
                 content['links'].append({
@@ -4126,7 +4102,7 @@ class API:
         result = [r[2] for r in result]
         result = list(map(json.loads, result))
         LOGGER.debug(f'STAC search collections :{len(result)}')
-        result = [r['links'] for r in result]
+        result = [r['links'] for r in result if (r.get('links','') != '')]
         # result = ['/'.join(r.split('/')[-2:]) for r in result]
         result = map(_recursiveSearchItems,repeat(request), result)
         result = [ obj for c in result for obj in c ]
