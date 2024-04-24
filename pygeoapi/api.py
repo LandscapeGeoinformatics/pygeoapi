@@ -4041,6 +4041,102 @@ class API:
     @gzip
     @pre_process
     @jsonldify
+    def get_stac_collections(self, request: Union[APIRequest, Any],
+                      path) -> Tuple[dict, int, str]:
+        """
+        Provide STAC resource path
+
+        :param request: APIRequest instance with query params
+
+        :returns: tuple of headers, status code, content
+        """
+
+        if not request.is_valid():
+            return self.get_format_exception(request)
+        headers = request.get_response_headers(**self.api_headers)
+
+        datasets = None
+        LOGGER.debug(f'Path: {path.split("/")} , Request format : {request.format}')
+        dir_tokens = path.split('/')
+        if dir_tokens:
+            if (len(dir_tokens) == 2):
+                datasets = [dir_tokens[1]]
+            else:
+                datasets = filter_dict_by_key_value(self.config['resources'], 'type', 'stac-collection')
+                datasets = list(datasets.keys())
+
+        stac_collections = filter_dict_by_key_value(self.config['resources'],
+                                                    'type', 'stac-collection')
+        contents = []
+        for dataset in datasets:
+            if dataset not in stac_collections:
+                msg = 'Collection not found'
+                return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                          request.format, 'NotFound', msg)
+
+            LOGGER.debug('Loading provider')
+            try:
+                p = load_plugin('provider', get_provider_by_type(
+                    stac_collections[dataset]['providers'], 'stac'))
+            except ProviderConnectionError as err:
+                LOGGER.error(err)
+                msg = 'connection error (check logs)'
+                return self.get_exception(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                    request.format, 'NoApplicableCode', msg)
+
+            id_ = f'{dataset}-stac'
+            stac_version = '1.0.0'
+
+            content = {
+                'id': id_,
+                'type': 'Catalog',
+                'stac_version': stac_version,
+                'description': l10n.translate(
+                    stac_collections[dataset]['description'], request.locale),
+                'links': []
+            }
+            try:
+                stac_data = p.get_data_path(
+                    f'{self.base_url}/stac',
+                    dataset,
+                    ''
+                )
+            except ProviderNotFoundError as err:
+                LOGGER.error(err)
+                msg = 'resource not found'
+                return self.get_exception(HTTPStatus.NOT_FOUND, headers,
+                                          request.format, 'NotFound', msg)
+            except Exception as err:
+                LOGGER.error(err)
+                msg = 'data query error'
+                return self.get_exception(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, headers,
+                    request.format, 'NoApplicableCode', msg)
+
+            if isinstance(stac_data, dict):
+                content.update(stac_data)
+                if (content['type']=='Collection' and len(dir_tokens)>1):
+                    content['title'] = f'{dataset}/{content["title"]}'
+                # LOGGER.debug(f'stac_collections : {stac_collections[dataset]["links"]}')
+                if (len(list(stac_collections[dataset]['links'][0].keys())) > 0):
+                    content['links'].extend(stac_collections[dataset]['links'])
+                # LOGGER.debug(content['links'])
+                if content['type'] == 'Feature':
+                    try:
+                        del content['assets']['default']
+                    except KeyError:
+                        pass
+            contents.append(content)
+        if (len(contents) == 1):
+            return headers, HTTPStatus.OK, to_json(contents[0], self.pretty_print)
+        else:
+           contents = { 'collections':contents }
+           return headers, HTTPStatus.OK, to_json(contents, self.pretty_print)
+
+    @gzip
+    @pre_process
+    @jsonldify
     def get_stac_search(self, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
 
         """

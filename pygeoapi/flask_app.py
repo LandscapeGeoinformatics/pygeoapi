@@ -480,7 +480,12 @@ def stac_catalog_path(path):
 
     :returns: HTTP response
     """
-    return get_response(api_.get_stac_path(request, path))
+    tokens = path.split("/")
+    if (tokens[0] == 'collections'):
+        request.format = 'json'
+        return get_response(api_.get_stac_collections(request, path))
+    else:
+        return get_response(api_.get_stac_path(request, path))
 
 @BLUEPRINT.route('/stac/search',methods=['GET', 'POST'])
 def stac_catalog_search():
