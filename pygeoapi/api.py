@@ -59,6 +59,7 @@ import pytz
 from shapely.errors import WKTReadingError
 from shapely.wkt import loads as shapely_loads
 import shapely.geometry
+from shapely.geometry import shape, GeometryCollection
 
 from pygeoapi import __version__, l10n
 from pygeoapi.formatter.base import FormatterSerializationError
@@ -4060,8 +4061,8 @@ class API:
         LOGGER.debug(f'Path: {path.split("/")} , Request format : {request.format}')
         dir_tokens = path.split('/')
         if dir_tokens:
-            if (len(dir_tokens) == 2):
-                datasets = [dir_tokens[1]]
+            if (dir_tokens[0] != 'collections'):
+                datasets = [dir_tokens[0]]
             else:
                 datasets = filter_dict_by_key_value(self.config['resources'], 'type', 'stac-collection')
                 datasets = list(datasets.keys())
@@ -4165,9 +4166,6 @@ class API:
                 items+=tmp
             return items
 
-        def _bboxWrapper(l):
-            return shapely.geometry.box(*l)
-
         if not request.is_valid():
             return self.get_format_exception(request)
         headers = request.get_response_headers(**self.api_headers)
@@ -4175,13 +4173,20 @@ class API:
         # - b'{"limit": 10, "collections": ["eu_l8_EVI"], "sortby": [{"field": "collection", "direction": "asc"}]}'
         LOGGER.debug(f'STAC search (POST data) : {request._data}')
         queries = json.loads(request._data.decode("utf-8"))
-        limit = queries['limit'] if (queries.get('limit', '') != '') else [{'limit':''}]
+        LOGGER.debug(queries)
+        max_items = queries['max_items'] if (queries.get('max_items', '') != '') else -1
         sortby = queries['sortby'][0] if (queries.get('sortby', '') != '') else {'field':''}
-        if (queries.get('limit') is not None):
-            del queries['limit']
+        if (queries.get('max_items') is not None):
+            del queries['max_items']
         if (queries.get('sortby') is not None):
             del queries['sortby']
+        if (queries.get('limit') is not None):
+            del queries['limit']
         criteria = list(queries.keys())
+        if ('bbox' in criteria and 'intersects' in criteria):
+            return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
+                                      request.format, 'InvalidParameterValue',
+                                      'Only one of either intersects or bbox may be specified')
         # Search : Start from collections level (biggest), then with others criteria for filtering.
         #          If the search doesn't comes with collections param , make one.
         if ('collections' not in criteria):
@@ -4220,10 +4225,25 @@ class API:
                 LOGGER.debug(f'STAC search bbox filter: {bbox}')
                 bbox = shapely.geometry.box(*bbox)
                 items_bbox  = [ obj['bbox'] for obj in result  ]
-                items_bbox = list(map(_bboxWrapper,items_bbox))
-                items_bbox = list(map(bbox.intersects,items_bbox))
+                items_bbox = list(map(lambda x :shapely.geometry.box(*x),items_bbox))
+                items_bbox = list(map(lambda x: bbox.intersects(x), items_bbox))
                 find_idx =  [ i for i,x in enumerate(items_bbox) if (x) ]
                 LOGGER.debug(f'STAC search bbox filter found : {find_idx}')
+                filter_idx.update(find_idx)
+            if(filter_ == 'intersects'):
+                got_filter = True
+                geojson = queries['intersects']
+                LOGGER.debug(geojson)
+                try:
+                    geoobj = shape(geojson)
+                except Exception as e:
+                    return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
+                                              request.format, 'InvalidParameterValue',
+                                              f'Error in converting geojson :{e}')
+                items_geometry  = [ shape(obj['geometry']) for obj in result  ]
+                items_geometry = list(map(lambda x: geoobj.intersects(x), items_geometry))
+                find_idx =  [ i for i,x in enumerate(items_geometry) if (x) ]
+                LOGGER.debug(f'STAC search intersects filter found : {find_idx}')
                 filter_idx.update(find_idx)
 
         find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
@@ -4240,7 +4260,8 @@ class API:
         #            pass
         LOGGER.debug(f'STAC search filtered results : {len(result)}')
         # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
-        result = { "type": "FeatureCollection", "features":result }
+        max_items = len(result) if (max_items == -1) else max_items
+        result = { "type": "FeatureCollection", "features":result[:max_items] }
 
 
         return headers, HTTPStatus.OK, to_json(result, self.pretty_print)

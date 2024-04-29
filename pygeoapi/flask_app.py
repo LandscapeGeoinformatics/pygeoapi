@@ -471,6 +471,19 @@ def stac_catalog_root():
     return get_response(api_.get_stac_root(request))
 
 
+@BLUEPRINT.route('/stac/collections/<path:path>')
+def stac_catalog_path_collections(path):
+    """
+    STAC path endpoint
+
+    :param path: path
+
+    :returns: HTTP response
+    """
+    request.format = 'json'
+    return get_response(api_.get_stac_collections(request, path))
+
+
 @BLUEPRINT.route('/stac/<path:path>')
 def stac_catalog_path(path):
     """
