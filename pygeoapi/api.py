@@ -95,6 +95,7 @@ from itertools import repeat
 from collections import Counter
 import urllib
 import pprint
+import operator
 LOGGER = logging.getLogger(__name__)
 
 #: Return headers for requests (e.g:X-Powered-By)
@@ -4139,7 +4140,7 @@ class API:
     @gzip
     @pre_process
     @jsonldify
-    def get_stac_search(self, request: Union[APIRequest, Any]) -> Tuple[dict, int, str]:
+    def get_stac_search(self, request: Union[APIRequest, Any], method) -> Tuple[dict, int, str]:
 
         """
         Provide STAC Search
@@ -4148,6 +4149,8 @@ class API:
 
         :returns: tuple of headers, status code, content
         """
+        query_opr = {  'eq': operator.eq , 'neq': operator.ne, 'lt': operator.lt, 'lte': operator.le,
+                       'gt': operator.gt , 'gte': operator.ge , 'startswith': None , 'endswith': None, 'contain': None, 'in': None}
         def _recursiveSearchItems(request, result):
             result = [ r['href']  for r in result if (r['rel'] != 'root' and r['rel']!= 'self' and r['rel']!='parent')]
             result = [r.split('stac')[-1][1:] for r in result]
@@ -4166,14 +4169,32 @@ class API:
                 items+=tmp
             return items
 
+        def _recursiveGetProperty(nodes,item):
+            value = item[nodes[0]]
+            for node in range(1,len(nodes)):
+                value = value[nodes[i]]
+            return value
+
+
         if not request.is_valid():
             return self.get_format_exception(request)
         headers = request.get_response_headers(**self.api_headers)
         headers['Content-Type'] = 'application/geo+json'
         # - b'{"limit": 10, "collections": ["eu_l8_EVI"], "sortby": [{"field": "collection", "direction": "asc"}]}'
-        LOGGER.debug(f'STAC search (POST data) : {request._data}')
-        queries = json.loads(request._data.decode("utf-8"))
-        LOGGER.debug(queries)
+        if (method == 'GET'):
+            queries = request._args.to_dict()
+            if (queries.get('ids')):
+                ids = queries['ids'].split(',')
+                queries['ids'] = ids
+            if (queries.get('collections')):
+                cols = queries['collections'].split(',')
+                queries['collections'] = cols
+            if (queries.get('bbox')):
+                bbox = queries['bbox'].split(',')
+                queries['bbox'] = bbox
+        else:
+            queries = json.loads(request._data.decode("utf-8"))
+        LOGGER.debug(f'STAC search (Query Parameters) : {queries}')
         max_items = queries['max_items'] if (queries.get('max_items', '') != '') else -1
         sortby = queries['sortby'][0] if (queries.get('sortby', '') != '') else {'field':''}
         if (queries.get('max_items') is not None):
@@ -4219,6 +4240,16 @@ class API:
         filter_idx = Counter()
         got_filter = False
         for filter_ in criteria:
+            if(filter_ == 'ids'):
+                got_filter = True
+                ids = queries['ids'] # Assume WGS84
+                LOGGER.debug(f'STAC search ids filter: {ids}')
+                items_id  = [ obj['id'] for obj in result  ]
+                LOGGER.debug(items_id)
+                items_id = list(map(lambda x : (x in ids),items_id))
+                find_idx =  [ i for i,x in enumerate(items_id) if (x) ]
+                LOGGER.debug(f'STAC search ids filter found : {find_idx}')
+                filter_idx.update(find_idx)
             if(filter_ == 'bbox'):
                 got_filter = True
                 bbox = queries['bbox'] # Assume WGS84
@@ -4233,7 +4264,7 @@ class API:
             if(filter_ == 'intersects'):
                 got_filter = True
                 geojson = queries['intersects']
-                LOGGER.debug(geojson)
+                LOGGER.debug(f'STAC search intersects filter: {geojson}')
                 try:
                     geoobj = shape(geojson)
                 except Exception as e:
@@ -4245,6 +4276,46 @@ class API:
                 find_idx =  [ i for i,x in enumerate(items_geometry) if (x) ]
                 LOGGER.debug(f'STAC search intersects filter found : {find_idx}')
                 filter_idx.update(find_idx)
+            if(filter_ == 'query'):
+                got_filter = True
+                query = queries['query'] # Assume WGS84
+                LOGGER.debug(f'STAC search query filter: {query}')
+                properties = query.keys()
+                for p in properties:
+                    operators = query[p]
+                    nodes = p.split(';')
+                    try:
+                        items_value = list(map(lambda x: _recursiveGetProperty(nodes,x), result))
+                    except Exception as e:
+                        return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
+                                                  request.format, 'InvalidParameterValue',
+                                                  f'Error in get property: {e}')
+                    opr_results = []
+                    try:
+                        for op in operators:
+                            opk = op.keys()
+                            if (query_opr.get(opk) != None):
+                                opr_results.append(list(map(lambda x: query_opr[opk](operators[opk],x),items_value)))
+                            elif ( opk.lower() in ['startswith', 'endswith', 'contain', 'in'] ):
+                                if (opk.lower() == 'startswith'):
+                                    opr_results.append(list(map(lambda x: x.startswith(operators[opk]),items_value)))
+                                if (opk.lower() == 'endswith'):
+                                    opr_results.append(list(map(lambda x: x.endswith(operators[opk]),items_value)))
+                                if (opk.lower() == 'contain'):
+                                    idx = list(map(lambda x: x.find(operators[opk]) ,items_value))
+                                    opr_results.append(np.where(idx!=-1,1,0))
+                                if (opk.lower() == 'in'):
+                                    opr_results.append(list(map(lambda x: (x in operators[opk]),items_value)))
+                            else:
+                                raise Exception('Operator not found')
+                    except Exception as e:
+                        return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
+                                                  request.format, 'InvalidParameterValue',
+                                                  f'Error in evaluating operator : {e}')
+                    opr_results = np.array(opr_results,dtype=bool)
+                    opr_results = np.all(opr_results,axis=0)
+                    find_idx =  [ i for i,x in enumerate(opr_results) if (x) ]
+                    filter_idx.update(find_idx)
 
         find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
         result =  [ r for i,r in enumerate(result) if (i in find_idx) ]

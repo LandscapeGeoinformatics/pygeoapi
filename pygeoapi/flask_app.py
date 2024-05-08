@@ -507,7 +507,7 @@ def stac_catalog_search():
 
     :returns: HTTP response
     """
-    return get_response(api_.get_stac_search(request))
+    return get_response(api_.get_stac_search(request,request.method))
 
 @ADMIN_BLUEPRINT.route('/admin/config', methods=['GET', 'PUT', 'PATCH'])
 def admin_config():
