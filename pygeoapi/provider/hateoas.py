@@ -188,6 +188,156 @@ class HateoasProvider(BaseProvider):
     def __repr__(self):
         return f'<HateoasProvider> {self.data}'
 
+# This class different from HateoasProvider by loading the existing json as content
+# for catalog, collection and asset in order to keep those attributes that are generated from pySTAC.
+
+
+class pySTACHateoasProvider(HateoasProvider):
+    def __init__(self, provider_def):
+        """
+        Initialize object
+
+        :param provider_def: provider definition
+
+        :returns: pygeoapi.provider.hateoas.HateoasProvider
+        """
+
+        super().__init__(provider_def)
+
+    def get_data_path(self, baseurl, urlpath, entrypath):
+        """
+        Gets directory listing or file description or raw file dump
+
+        :param baseurl: base URL of endpoint
+        :param urlpath: base path of URL
+        :param entrypath: basepath of the entry selected (equivalent of URL)
+
+        :returns: `dict` of catalogs/collections or `dict` of GeoJSON item
+        """
+
+        thispath = os.path.join(baseurl, urlpath)
+
+        resource_type = None
+        root_link = None
+        child_links = []
+
+        data_path = self.data + entrypath
+
+        if '/' not in entrypath:  # root
+            root_link = baseurl
+        else:
+            parentpath = url_join(thispath, '.')
+            child_links.append({
+                'rel': 'parent',
+                'href': f'{parentpath}?f=json',
+                'type': 'application/json'
+            })
+            child_links.append({
+                'rel': 'parent',
+                'href': parentpath,
+                'type': 'text/html'
+            })
+
+            depth = entrypath.count('/')
+            root_path = '/'.replace('/', '../' * depth, 1)
+            root_link = url_join(thispath, root_path)
+
+        content = {}
+
+        LOGGER.debug('Checking if path exists as Catalog, Collection or Asset')
+        try:
+            content = _get_json_data(f'{data_path}/catalog.json')
+            resource_type = 'Catalog'
+        except Exception:
+            try:
+                content = _get_json_data(f'{data_path}/collection.json')
+                resource_type = 'Collection'
+            except Exception:
+                try:
+                    filename = os.path.basename(data_path)
+                    content = _get_json_data(f'{data_path}/{filename}.json')
+                    resource_type = 'Assets'
+                except Exception:
+                    msg = f'Resource does not exist: {data_path}'
+                    LOGGER.error(msg)
+                    raise ProviderNotFoundError(msg)
+
+
+
+        if resource_type == 'Catalog' or resource_type == 'Collection':
+            content['type'] = resource_type
+
+            link_href_list = []
+            for link in content["links"]:
+                if resource_type in ['Catalog', 'Collection'] \
+                   and link["rel"] in ["child", "item"]:
+                    link_href_list.append(link["href"].replace('\\', '/'))
+            link_href_list.sort()
+
+            for link in link_href_list:
+                unused, path_ending, entry_type = link.split('/')
+                newpath = os.path.join(baseurl, urlpath, path_ending).replace('\\', '/') # noqa
+
+                if entry_type == 'catalog.json':
+                    child_links.append({
+                        'rel': 'child',
+                        'href': newpath,
+                        'type': 'text/html',
+                        'created': "-",
+                        'entry:type': 'Catalog'
+                    })
+                elif entry_type == 'collection.json':
+                    child_links.append({
+                        'rel': 'child',
+                        'href': newpath,
+                        'type': 'text/html',
+                        'created': "-",
+                        'entry:type': 'Collection'
+                    })
+                else:
+                    child_links.append({
+                        'rel': 'item',
+                        'href': newpath,
+                        'title': path_ending,
+                        'created': "-",
+                        'entry:type': 'Item'
+                    })
+
+            if resource_type == "Collection" and len(link_href_list) == 0:
+                content = _modify_content_for_display(
+                    content,
+                    baseurl,
+                    urlpath
+                )
+
+        elif resource_type == 'Assets':
+            content = _modify_content_for_display(content, baseurl, urlpath)
+
+        #content['links'].extend(child_links)
+        child_links.extend([{
+                                   'rel': 'root',
+                                   'href': f'{root_link}?f=json',
+                                   'type': 'application/json'
+                                   }, {
+                                   'rel': 'root',
+                                   'href': root_link,
+                                   'type': 'text/html'
+                                   }, {
+                                   'rel': 'self',
+                                   'href': f'{thispath}?f=json',
+                                   'type': 'application/json',
+                                   }, {
+                                   'rel': 'self',
+                                   'href': thispath,
+                                   'type': 'text/html'
+                                }])
+        content['links'] = child_links
+
+        return content
+
+    def __repr__(self):
+        return f'<HateoasProvider> {self.data}'
+
 
 def _modify_content_for_display(
         content: dict,

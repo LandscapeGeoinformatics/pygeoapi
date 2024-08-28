@@ -48,6 +48,7 @@ PLUGINS = {
         'FileSystem': 'pygeoapi.provider.filesystem.FileSystemProvider',
         'GeoJSON': 'pygeoapi.provider.geojson.GeoJSONProvider',
         'Hateoas': 'pygeoapi.provider.hateoas.HateoasProvider',
+        'pySTACHateoas': 'pygeoapi.provider.hateoas.pySTACHateoasProvider',
         'MapScript': 'pygeoapi.provider.mapscript_.MapScriptProvider',
         'MongoDB': 'pygeoapi.provider.mongo.MongoProvider',
         'MVT-tippecanoe': 'pygeoapi.provider.mvt_tippecanoe.MVTTippecanoeProvider',  # noqa: E501

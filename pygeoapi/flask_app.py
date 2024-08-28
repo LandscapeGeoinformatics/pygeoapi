@@ -543,8 +543,23 @@ def stac_catalog_path(path):
 
     :returns: HTTP response
     """
+    # To Support STAC API collections endpoint
+    tokens = path.split("/")
+    if (tokens[0] == 'collections'):
+        request.format = 'json'
+        return execute_from_flask(stac_api.get_stac_collections, request, path)
+    else:
+        return execute_from_flask(stac_api.get_stac_path, request, path)
 
-    return execute_from_flask(stac_api.get_stac_path, request, path)
+
+@BLUEPRINT.route('/stac/search', methods=['GET', 'POST'])
+def stac_catalog_search():
+    """
+    STAC API Search endpoint
+
+    :returns: HTTP response
+    """
+    return execute_from_flask(stac_api.get_stac_search, request, request.method)
 
 
 @ADMIN_BLUEPRINT.route('/admin/config', methods=['GET', 'PUT', 'PATCH'])
