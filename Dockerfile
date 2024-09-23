@@ -34,7 +34,7 @@
 #
 # =================================================================
 
-FROM ubuntu:jammy-20240627.1
+FROM ubuntu:jammy-20240911.1
 
 LABEL maintainer="Just van den Broecke <justb4@gmail.com>"
 
@@ -98,7 +98,6 @@ ENV TZ=${TZ} \
     python3-greenlet \
     python3-pip \
     python3-tz \
-    python3-unicodecsv \
     python3-yaml \
     ${ADD_DEB_PACKAGES}"
 
