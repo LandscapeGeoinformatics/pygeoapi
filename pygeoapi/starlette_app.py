@@ -334,11 +334,7 @@ async def collection_items(request: Request, collection_id=None, item_id=None):
     if 'item_id' in request.path_params:
         item_id = request.path_params['item_id']
     if item_id is None:
-        if request.method == 'GET':  # list items
-            return await execute_from_starlette(
-                itemtypes_api.get_collection_items, request, collection_id,
-                skip_valid_check=True)
-        elif request.method == 'POST':  # filter or manage items
+        if request.method == 'POST':  # filter or manage items
             content_type = request.headers.get('content-type')
             if content_type is not None:
                 if content_type == 'application/geo+json':
@@ -357,6 +353,10 @@ async def collection_items(request: Request, collection_id=None, item_id=None):
                 itemtypes_api.manage_collection_item, request,
                 'options', collection_id, skip_valid_check=True,
             )
+        else:  # GET: list items
+            return await execute_from_starlette(
+                itemtypes_api.get_collection_items, request, collection_id,
+                skip_valid_check=True)
 
     elif request.method == 'DELETE':
         return await execute_from_starlette(
@@ -511,12 +511,13 @@ async def get_job_result_resource(request: Request,
         api_.get_job_result_resource, request, job_id, resource)
 
 
-async def get_collection_edr_query(request: Request, collection_id=None, instance_id=None):  # noqa
+async def get_collection_edr_query(request: Request, collection_id=None, instance_id=None, location_id=None):  # noqa
     """
     OGC EDR API endpoints
 
     :param collection_id: collection identifier
     :param instance_id: instance identifier
+    :param location_id: location id of a /locations/<location_id> query
 
     :returns: HTTP response
     """
@@ -527,10 +528,15 @@ async def get_collection_edr_query(request: Request, collection_id=None, instanc
     if 'instance_id' in request.path_params:
         instance_id = request.path_params['instance_id']
 
-    query_type = request["path"].split('/')[-1]  # noqa
+    if 'location_id' in request.path_params:
+        location_id = request.path_params['location_id']
+        query_type = 'locations'
+    else:
+        query_type = request['path'].split('/')[-1]
+
     return await execute_from_starlette(
         edr_api.get_collection_edr_query, request, collection_id,
-        instance_id, query_type,
+        instance_id, query_type, location_id,
         skip_valid_check=True,
     )
 

@@ -80,6 +80,8 @@ class RasterioProvider(BaseProvider):
                 dtype2 = dtype
                 if dtype.startswith('float'):
                     dtype2 = 'number'
+                elif dtype.startswith('int'):
+                    dtype2 = 'integer'
 
                 self._fields[i2] = {
                     'title': name,
@@ -240,16 +242,15 @@ class RasterioProvider(BaseProvider):
             out_meta['units'] = _data.units
 
             LOGGER.debug('Serializing data in memory')
-            with MemoryFile() as memfile:
-                with memfile.open(**out_meta) as dest:
-                    dest.write(out_image)
+            if format_ == 'json':
+                LOGGER.debug('Creating output in CoverageJSON')
+                out_meta['bands'] = args['indexes']
+                return self.gen_covjson(out_meta, out_image)
 
-                if format_ == 'json':
-                    LOGGER.debug('Creating output in CoverageJSON')
-                    out_meta['bands'] = args['indexes']
-                    return self.gen_covjson(out_meta, out_image)
-
-                else:  # return data in native format
+            else:  # return data in native format
+                with MemoryFile() as memfile:
+                    with memfile.open(**out_meta) as dest:
+                        dest.write(out_image)
                     LOGGER.debug('Returning data in native format')
                     return memfile.read()
 
