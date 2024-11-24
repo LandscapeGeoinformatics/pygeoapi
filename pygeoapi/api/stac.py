@@ -55,7 +55,7 @@ from pygeoapi.util import (
 
 from . import APIRequest, API, FORMAT_TYPES, F_JSON, F_HTML
 # STAC API
-from itertools import repeat
+from itertools import repeat, chain
 import operator
 import json
 from collections import Counter
@@ -71,7 +71,8 @@ CONFORMANCE_CLASSES = [
     "https://api.stacspec.org/v1.0.0/ogcapi-features",
     "https://api.stacspec.org/v1.0.0/item-search",
     "https://api.stacspec.org/v1.0.0/item-search#sort",
-    "https://api.stacspec.org/v1.0.0/collections"
+    "https://api.stacspec.org/v1.0.0/collections",
+    "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30"  # for pystac_client 0.3.2 in qgis on collections conformance classes
 ]
 
 
@@ -254,87 +255,46 @@ def get_stac_collections(api: API, request: APIRequest, path) -> Tuple[dict, int
 
     :remark: This function is copied and modified from get_stac_path to avoid changes in the original.
     """
+    def _recursiveSearchCollections(request, result):
+        result = [r['href'].split('?')[0] for r in result if (r['rel'] == 'child')]
+        result = [r.split('stac')[-1][1:] for r in result]
+        result = list(map(get_stac_path, repeat(api), repeat(request), result))
+        result = [r[2] for r in result]
+        result = list(map(json.loads, result))
+        items = [r for r in result if (r['type'] == 'Collection')]
+        result = [r['links'] for r in result if (r['type'] != 'Feature')]
+        recursive = []
+        if (len(result) > 0):
+            for r in result:
+                tmp = [link for link in r if (link['rel'] == 'child')]
+                recursive += tmp
+            tmp = _recursiveSearchCollections(request, recursive)
+            items += tmp
+        return items
 
     if not request.is_valid():
         return api.get_format_exception(request)
     headers = request.get_response_headers(**api.api_headers)
 
-    datasets = None
-    LOGGER.debug(f'Path: {path.split("/")} , Request format : {request.format}')
+    dataset = None
+    LOGGER.info(f'Path: {path.split("/")} , Request format : {request.format}')
     dir_tokens = path.split('/')  # ex : /collections/{collection_id} or /collections
     # if dir_tokens:
     # if (dir_tokens[0] != 'collections'):
-    if (len(dir_tokens[0]) == 2):  # get specific collection by id
-        datasets = [dir_tokens[-1]]
-    else:
-        # No collection id is specified. get all collections
-        datasets = filter_dict_by_key_value(api.config['resources'], 'type', 'stac-collection')
-        datasets = list(datasets.keys())
-
-    stac_collections = filter_dict_by_key_value(api.config['resources'],
-                                                'type', 'stac-collection')
-    contents = []
+    if (len(dir_tokens) == 2):  # get specific collection by id
+        dataset = dir_tokens[-1]
+    request._format = F_JSON
+    root_result = get_stac_root(api, request)[2]
+    root_result = json.loads(root_result)['links']
+    root_result = [[r] for r in root_result if (r['rel'] == 'child')]
+    stac_collections = list(map(_recursiveSearchCollections, repeat(request), root_result))
+    stac_collections = list(chain(*stac_collections))
+    contents = [c for c in stac_collections if (c['id'] == dataset)] if (dataset is not None) else stac_collections
     # get individual collection stac json
-    for dataset in datasets:
-        if dataset not in stac_collections:
-            msg = 'Collection not found'
-            return api.get_exception(HTTPStatus.NOT_FOUND, headers,
-                                     request.format, 'NotFound', msg)
-
-        LOGGER.debug('Loading provider')
-        try:
-            p = load_plugin('provider', get_provider_by_type(
-                stac_collections[dataset]['providers'], 'stac'))
-        except ProviderConnectionError as err:
-            LOGGER.error(err)
-            msg = 'connection error (check logs)'
-            return api.get_exception(
-                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
-                request.format, 'NoApplicableCode', msg)
-
-        id_ = f'{dataset}-stac'
-        stac_version = '1.0.0'
-
-        content = {
-            'id': id_,
-            'type': 'Catalog',
-            'stac_version': stac_version,
-            'description': l10n.translate(
-                stac_collections[dataset]['description'], request.locale),
-            'links': []
-        }
-        try:
-            stac_data = p.get_data_path(
-                f'{api.base_url}/stac',
-                dataset,
-                ''
-            )
-        except ProviderNotFoundError as err:
-            LOGGER.error(err)
-            msg = 'resource not found'
-            return api.get_exception(HTTPStatus.NOT_FOUND, headers,
-                                     request.format, 'NotFound', msg)
-        except Exception as err:
-            LOGGER.error(err)
-            msg = 'data query error'
-            return api.get_exception(
-                HTTPStatus.INTERNAL_SERVER_ERROR, headers,
-                request.format, 'NoApplicableCode', msg)
-
-        if isinstance(stac_data, dict):
-            content.update(stac_data)
-            if (content['type'] == 'Collection' and len(dir_tokens) > 1):
-                content['title'] = f'{dataset}/{content["title"]}'
-            # LOGGER.debug(f'stac_collections : {stac_collections[dataset]["links"]}')
-            if (len(list(stac_collections[dataset]['links'][0].keys())) > 0):
-                content['links'].extend(stac_collections[dataset]['links'])
-            # LOGGER.debug(content['links'])
-            if content['type'] == 'Feature':
-                try:
-                    del content['assets']['default']
-                except KeyError:
-                    pass
-        contents.append(content)
+    #    if dataset not in stac_collections:
+    #        msg = 'Collection not found'
+    #        return api.get_exception(HTTPStatus.NOT_FOUND, headers,
+    #                                 request.format, 'NotFound', msg)
     if (len(contents) == 1):
         # for request with collection_id, no need to enclose the content array inside collections dict
         return headers, HTTPStatus.OK, to_json(contents[0], api.pretty_print)
@@ -379,6 +339,14 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
             items += tmp
         return items
 
+    def _recursiveCollections(api, request, path):
+        tmp = json.loads(get_stac_collections(api, request, path)[2])
+        child = [l['href'].split('/')[-1] for l in tmp['links'] if (l.get('entry:type')=='Collection')]
+        result = [tmp]
+        for c in child:
+            result += _recursiveCollections(api, request, f'collections/{c}')
+        return result
+
     # For opertor
     # def _recursiveGetProperty(nodes, item):
     #    value = item[nodes[0]]
@@ -420,33 +388,29 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
                                  'Only one of either intersects or bbox may be specified')
     # Search : Start from collections level (biggest), then with others criteria for filtering.
     #          If the search doesn't comes with collections param , make one.
+    request._format = F_JSON
     if ('collections' not in criteria):
-        LOGGER.debug('STAC search doesn\'t contain collections')
-        root_result = get_stac_root(api, request)
-        root_result = root_result[2]
-        root_result = json.loads(root_result)['links']
-        root_result = [r['href'] for r in root_result if (r['rel'] == 'child')]
-        root_result = [r.split('/')[-1].split('?')[0] for r in root_result if (r.endswith('json'))]
+        LOGGER.info('STAC search doesn\'t contain collections')
+        queries['collections'] = json.loads(get_stac_collections(api, request, 'collections')[2])['collections']
+        # root_result = [r.split('/')[-1].split('?')[0] for r in root_result if (r.endswith('json'))]
         criteria.append('collections')
-        queries['collections'] = root_result
+    else:
+        tmp = []
+        children = []
+        for c in queries["collections"]:
+            collect = json.loads(get_stac_collections(api, request, f'collections/{c}')[2])
+            children += ['collections/' + l['href'].split('/')[-1] for l in collect['links'] if (l.get('entry:type') == 'Collection')]
+            tmp += [collect] if (len(children) == 0) else []
+        for c in children:
+            tmp +=  _recursiveCollections(api, request, c)
+        queries['collections'] = tmp
     # Get items under each collections - super set
     collections = queries['collections']
-    result = list(map(get_stac_path, repeat(api), repeat(request), collections))
-    result = [r[2] for r in result]
-    result = list(map(json.loads, result))
-    LOGGER.debug(f'STAC search collections :{len(result)}')
-    result = [r['links'] for r in result if (r.get('links', '') != '')]
-    # result = ['/'.join(r.split('/')[-2:]) for r in result]
+    LOGGER.info(f'STAC search collections :{len(collections)}')
+    result = [c['links'] for c in collections if (c.get('links', '') != '')]
     result = map(_recursiveSearchItems, repeat(request), result)
     result = [obj for c in result for obj in c]
-    # result = [o['href'] for r in result for o in r if (o['rel'] == 'item')]
-    # result = ['/'.join(r.split('/')[-2:]) for r in result]
-    LOGGER.debug(f'STAC search items:{len(result)}')
-    # result = list(map(self.get_stac_path, repeat(request), result))
-    # result = [r[2] for r in result]
-    # result = list(map(json.loads, result))
-    LOGGER.debug(f'STAC search collections item result :{len(result)}')
-    # Filter's implememtation - create subset
+    LOGGER.info(f'STAC search items:{len(result)}')
     filter_idx = Counter()
     got_filter = False
     for filter_ in criteria:
@@ -458,23 +422,23 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
             LOGGER.debug(items_id)
             items_id = list(map(lambda x: (x in ids), items_id))
             find_idx = [i for i, x in enumerate(items_id) if (x)]
-            LOGGER.debug(f'STAC search ids filter found : {find_idx}')
+            LOGGER.info(f'STAC search ids filter found : {find_idx}')
             filter_idx.update(find_idx)
         if (filter_ == 'bbox'):
             got_filter = True
             bbox = queries['bbox']  # Assume WGS84
-            LOGGER.debug(f'STAC search bbox filter: {bbox}')
+            LOGGER.info(f'STAC search bbox filter: {bbox}')
             bbox = shapely.geometry.box(*bbox)
             items_bbox = [obj['bbox'] for obj in result]
             items_bbox = list(map(lambda x: shapely.geometry.box(*x), items_bbox))
             items_bbox = list(map(lambda x: bbox.intersects(x), items_bbox))
             find_idx = [i for i, x in enumerate(items_bbox) if (x)]
-            LOGGER.debug(f'STAC search bbox filter found : {find_idx}')
+            LOGGER.info(f'STAC search bbox filter found : {find_idx}')
             filter_idx.update(find_idx)
         if (filter_ == 'intersects'):
             got_filter = True
             geojson = queries['intersects']
-            LOGGER.debug(f'STAC search intersects filter: {geojson}')
+            LOGGER.info(f'STAC search intersects filter: {geojson}')
             try:
                 geoobj = shape(geojson)
             except Exception as e:
@@ -486,46 +450,6 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
             find_idx = [i for i, x in enumerate(items_geometry) if (x)]
             LOGGER.debug(f'STAC search intersects filter found : {find_idx}')
             filter_idx.update(find_idx)
-        # if (filter_ == 'query'):
-        #    got_filter = True
-        #    query = queries['query']  # Assume WGS84
-        #    LOGGER.debug(f'STAC search query filter: {query}')
-        #    properties = query.keys()
-            # for p in properties:
-            #    operators = query[p]
-            #    nodes = p.split(';')
-            #    try:
-            #        items_value = list(map(lambda x: _recursiveGetProperty(nodes,x), result))
-            #    except Exception as e:
-            #        return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
-            #                                  request.format, 'InvalidParameterValue',
-            #                                  f'Error in get property: {e}')
-            #    opr_results = []
-            #    try:
-            #        for op in operators:
-            #            opk = op.keys()
-            #            if (query_opr.get(opk) != None):
-            #                opr_results.append(list(map(lambda x: query_opr[opk](operators[opk],x),items_value)))
-            #            elif ( opk.lower() in ['startswith', 'endswith', 'contain', 'in'] ):
-            #                if (opk.lower() == 'startswith'):
-            #                    opr_results.append(list(map(lambda x: x.startswith(operators[opk]),items_value)))
-            #                if (opk.lower() == 'endswith'):
-            #                    opr_results.append(list(map(lambda x: x.endswith(operators[opk]),items_value)))
-            #                if (opk.lower() == 'contain'):
-            #                    idx = list(map(lambda x: x.find(operators[opk]) ,items_value))
-            #                    opr_results.append(np.where(idx!=-1,1,0))
-            #                if (opk.lower() == 'in'):
-            #                    opr_results.append(list(map(lambda x: (x in operators[opk]),items_value)))
-            #            else:
-            #                raise Exception('Operator not found')
-            #    except Exception as e:
-            #        return self.get_exception(HTTPStatus.BAD_REQUEST, headers,
-            #                                  request.format, 'InvalidParameterValue',
-            #                                  f'Error in evaluating operator : {e}')
-            #    opr_results = np.array(opr_results,dtype=bool)
-            #    opr_results = np.all(opr_results,axis=0)
-            #    find_idx =  [ i for i,x in enumerate(opr_results) if (x) ]
-            #   filter_idx.update(find_idx)
 
     find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
     result = [r for i, r in enumerate(result) if (i in find_idx)]
@@ -539,7 +463,7 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
     #            r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
     #        except KeyError:
     #            pass
-    LOGGER.debug(f'STAC search filtered results : {len(result)}')
+    LOGGER.info(f'STAC search filtered results : {len(result)}')
     # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
     max_items = len(result) if (max_items == -1) else max_items
     result = {"type": "FeatureCollection", "features": result[:max_items]}

@@ -188,7 +188,7 @@ CONFORMANCE = {
         "https://api.stacspec.org/v1.0.0/ogcapi-features",
         "https://api.stacspec.org/v1.0.0/item-search",
         "https://api.stacspec.org/v1.0.0/item-search#sort",
-        "https://api.stacspec.org/v1.0.0/collections"
+        "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30"  # for pystac_client 0.3.2 in qgis
     ]
 }
 
