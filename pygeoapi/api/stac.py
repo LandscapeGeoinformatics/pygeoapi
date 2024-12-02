@@ -406,10 +406,17 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
         queries['collections'] = tmp
     # Get items under each collections - super set
     collections = queries['collections']
-    LOGGER.info(f'STAC search collections :{len(collections)}')
     result = [c['links'] for c in collections if (c.get('links', '') != '')]
     result = map(_recursiveSearchItems, repeat(request), result)
     result = [obj for c in result for obj in c]
+    key = []
+    removeDuplicate = []
+    for i, r in enumerate(result):
+        if r['id'] not in key:
+            key.append(r['id'])
+            removeDuplicate.append(r)
+    result = removeDuplicate
+    LOGGER.info(f'STAC search collections :{len(collections)}')
     LOGGER.info(f'STAC search items:{len(result)}')
     filter_idx = Counter()
     got_filter = False
@@ -454,6 +461,7 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
     find_idx = list(filter_idx.keys()) if (got_filter is True) else list(range(len(result)))
     result = [r for i, r in enumerate(result) if (i in find_idx)]
     result = sorted(result, key=lambda k: k.get(sortby['field'], ''))
+
     # for r in result:
     #    if (r['assets']['image']['type'] == asset_cogtype):
     #        try:
