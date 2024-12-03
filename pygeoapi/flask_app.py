@@ -58,6 +58,10 @@ API_RULES = get_api_rules(CONFIG)
 if CONFIG['server'].get('admin'):
     from pygeoapi.admin import Admin
 
+static_url = '/static'
+if CONFIG['server'].get('static_url'):
+    static_url = CONFIG['server']['static_url']
+
 STATIC_FOLDER = 'static'
 if 'templates' in CONFIG['server']:
     STATIC_FOLDER = CONFIG['server']['templates'].get('static', 'static')
