@@ -66,7 +66,7 @@ STATIC_FOLDER = 'static'
 if 'templates' in CONFIG['server']:
     STATIC_FOLDER = CONFIG['server']['templates'].get('static', 'static')
 
-APP = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='/static')
+APP = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path=static_url)
 APP.url_map.strict_slashes = API_RULES.strict_slashes
 
 BLUEPRINT = Blueprint(
