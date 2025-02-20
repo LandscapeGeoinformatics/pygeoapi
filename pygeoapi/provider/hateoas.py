@@ -352,9 +352,11 @@ def _modify_content_for_display(
 
     :returns: `dict` of JSON item
     """
-    content['assets']['default'] = {
-        'href': os.path.join(baseurl, urlpath).replace('\\', '/'),
-    }
+    if(content.get('assets') is None):
+        content['assets']={'default': {
+                'href': os.path.join(baseurl, urlpath).replace('\\', '/'),
+             }
+        }
     for key in content['assets']:
         content['assets'][key]['file:size'] = 0
         try:

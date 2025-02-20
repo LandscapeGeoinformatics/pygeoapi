@@ -398,9 +398,13 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
         tmp = []
         children = []
         for c in queries["collections"]:
+            # there are 2 possible returns from get_stac_collection,
+            # if the collection not exists, it return an empty collection list :  {'collections': []}
+            # otherwise, it returns the collection details in json  : {'id': 'xxx', 'type': 'Collection', ....}
             collect = json.loads(get_stac_collections(api, request, f'collections/{c}')[2])
-            children += ['collections/' + l['href'].split('/')[-1] for l in collect['links'] if (l.get('entry:type') == 'Collection')]
-            tmp += [collect] if (len(children) == 0) else []
+            if (collect.get('collections') is None):
+                children += ['collections/' + l['href'].split('/')[-1] for l in collect['links'] if (l.get('entry:type') == 'Collection')]
+                tmp += [collect] if (len(children) == 0) else []
         for c in children:
             tmp +=  _recursiveCollections(api, request, c)
         queries['collections'] = tmp
@@ -462,15 +466,6 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
     result = [r for i, r in enumerate(result) if (i in find_idx)]
     result = sorted(result, key=lambda k: k.get(sortby['field'], ''))
 
-    # for r in result:
-    #    if (r['assets']['image']['type'] == asset_cogtype):
-    #        try:
-    #            s=r['assets']['image']['href']
-    #            s=urllib.parse.unquote(s)
-    #            s=s.split('?')[0]
-    #            r['assets']['image']['href']="/".join(s.split('/')[7:8]+s.split('/')[9:])
-    #        except KeyError:
-    #            pass
     LOGGER.info(f'STAC search filtered results : {len(result)}')
     # "context": { "returned":len(result), "limit":"0", "matched":len(find_idx) }
     max_items = len(result) if (max_items == -1) else max_items
