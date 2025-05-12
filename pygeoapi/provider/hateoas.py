@@ -358,7 +358,7 @@ def _modify_content_for_display(
              }
         }
     for key in content['assets']:
-        content['assets'][key]['file:size'] = 0
+        # content['assets'][key]['file:size'] = 0
         try:
             content['assets'][key]['created'] = content["properties"]["datetime"] # noqa
         except Exception as err:
