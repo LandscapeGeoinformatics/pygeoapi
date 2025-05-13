@@ -289,7 +289,7 @@ def get_stac_collections(api: API, request: APIRequest, path) -> Tuple[dict, int
     root_result = [[r] for r in root_result if (r['rel'] == 'child')]
     stac_collections = list(map(_recursiveSearchCollections, repeat(request), root_result))
     stac_collections = list(chain(*stac_collections))
-    contents = [c for c in stac_collections if (c['id'] == dataset)] if (dataset is not None) else stac_collections
+    contents = [c for c in stac_collections if (dataset in c['id'])] if (dataset is not None) else stac_collections
     # get individual collection stac json
     #    if dataset not in stac_collections:
     #        msg = 'Collection not found'
@@ -405,6 +405,9 @@ def get_stac_search(api: API, request: APIRequest, method) -> Tuple[dict, int, s
             if (collect.get('collections') is None):
                 children += ['collections/' + l['href'].split('/')[-1] for l in collect['links'] if (l.get('entry:type') == 'Collection')]
                 tmp += [collect] if (len(children) == 0) else []
+            else:
+                for t in collect['collections']:
+                    children += ['collections/' + l['href'].split('/')[-1] for l in t['links'] if (l.get('entry:type') == 'Collection')]
         for c in children:
             tmp +=  _recursiveCollections(api, request, c)
         queries['collections'] = tmp
