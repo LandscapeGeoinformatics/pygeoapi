@@ -61,7 +61,6 @@ import json
 from collections import Counter
 import shapely
 from shapely.geometry import shape
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -289,7 +288,7 @@ def get_stac_collections(api: API, request: APIRequest, path) -> Tuple[dict, int
     root_result = [[r] for r in root_result if (r['rel'] == 'child')]
     stac_collections = list(map(_recursiveSearchCollections, repeat(request), root_result))
     stac_collections = list(chain(*stac_collections))
-    contents = [c for c in stac_collections if (dataset in c['id'])] if (dataset is not None) else stac_collections
+    contents = [c for c in stac_collections if (dataset == c['id'])] if (dataset is not None) else stac_collections
     # get individual collection stac json
     #    if dataset not in stac_collections:
     #        msg = 'Collection not found'
